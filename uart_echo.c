@@ -28,6 +28,19 @@
 #include "utils/uartstdio.h"
 #include "driverlib/timer.h"
 #include "driverlib/interrupt.h"
+#include "driverlib/ssi.h"
+
+
+// xxxa_bxcd   a = power down, b = update both DAC registers
+//             c = load A register, d = load B register
+#define LOAD_DACA_INPUT 0x01
+#define LOAD_DACB_INPUT 0x02
+#define LOAD_DAC_INPUTS 0x03
+#define UPDATE_DAC_REG  0x08
+#define UPDATE_LOAD_A   0x09
+#define UPDATE_LOAD_B   0x0A
+#define UPDATE_LOAD     0x0B
+//#define 
 
 //*****************************************************************************
 //
@@ -69,27 +82,58 @@ uint32_t pui32ADC0Value[1];
 int ADCValueArray[128];
 int sampled = 0;
 int buttonPushed = 0;
-
+int ready = 0;	// collected 128 samples?
 
 
 
 void Switch_Handler (void);
 void Timer0A_Int(void);
+void writeCommand(uint8_t c);
+void writeData(uint8_t c);
+
+
 void SS3IntHandler (void) {
 
 	//
 	// Clear the ADC interrupt flag.
 	//
 	ADCIntClear(ADC0_BASE, 3);
-
+	int movingAverage = 0;
+	int comp = 0xFFF;
   //
   // Read ADC Value.
   //
   ADCSequenceDataGet(ADC0_BASE, 3, pui32ADC0Value);
 	ADCValueArray[sampled] = pui32ADC0Value[0];
+	if (ready)
+	{
+		switch(sampled)
+		{
+			case 0:
+				movingAverage = (ADCValueArray[0] + ADCValueArray[127] + ADCValueArray[126] + ADCValueArray[125])/4;
+				break;
+			case 1:
+				movingAverage = (ADCValueArray[1] + ADCValueArray[0] + ADCValueArray[127] + ADCValueArray[126])/4;
+				break;
+			case 2:
+				movingAverage = (ADCValueArray[2] + ADCValueArray[1] + ADCValueArray[0] + ADCValueArray[127])/4;
+				break;
+			default:
+				movingAverage = (ADCValueArray[sampled] + ADCValueArray[sampled-1] + 
+						ADCValueArray[sampled-2] + ADCValueArray[sampled-3])/4;
+		}
+		comp = 0xFFF - movingAverage;
+	}
+	
+	// Add output stuff here
+	
+	
 	sampled++;
 	if (sampled == 128)
+	{
 		sampled = 0;
+		ready = 1;
+	}
 }
 
 //*****************************************************************************
@@ -131,10 +175,18 @@ void ConfigureUART0(void) {
 // the data will be read then displayed on the console via UART0.
 //
 //*****************************************************************************
-int
-main(void)
-{
 
+// ============================================================================
+// Main
+// ============================================================================
+
+int main(void)
+{
+		int loopControl = 0;
+		int printingArray[8] = {0,0,0,0,0,0,0,0};
+		int printingCounter = 0;
+		int printRow = 0;
+		
     ROM_SysCtlClockSet(SYSCTL_SYSDIV_4 | SYSCTL_USE_PLL | SYSCTL_OSC_MAIN |
                    SYSCTL_XTAL_16MHZ);
 
@@ -163,15 +215,29 @@ main(void)
 		ROM_GPIOIntTypeSet(GPIO_PORTF_BASE, GPIO_PIN_0 | GPIO_PIN_4, GPIO_FALLING_EDGE);
 		GPIOIntEnable(GPIO_PORTF_BASE, GPIO_INT_PIN_0 | GPIO_INT_PIN_4);
 		
-
+		// Configure SSI0
+		ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_SSI0);
+		ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
+		GPIOPinConfigure(GPIO_PA2_SSI0CLK);
+    GPIOPinConfigure(GPIO_PA3_SSI0FSS);
+    GPIOPinConfigure(GPIO_PA4_SSI0RX);
+    GPIOPinConfigure(GPIO_PA5_SSI0TX);
+		ROM_GPIOPinTypeSSI(GPIO_PORTA_BASE, GPIO_PIN_5 | GPIO_PIN_4 | GPIO_PIN_3 |
+                   GPIO_PIN_2);
+		ROM_SSIConfigSetExpClk(SSI0_BASE, SysCtlClockGet(), SSI_FRF_MOTO_MODE_0,
+                       SSI_MODE_MASTER, 1000000, 8);
+		ROM_SSIEnable(SSI0_BASE);
+		
 		// Configure Timer0	
 		ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);	
-
+		
+		
+		
     //
     // The ADC0 peripheral must be enabled for use.
     //
     ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_ADC0);
-
+		
     //
     // For this example ADC0 is used with AIN0 on port E3.
 		// GPIO port E needs to be enabled so these pins can be used.
@@ -227,7 +293,12 @@ main(void)
 		ROM_ADCIntEnable(ADC0_BASE, 3);
 		ROM_IntEnable(INT_ADC0SS3);
 		ROM_IntMasterEnable();
+
 		UARTprintf("starting\n");
+// ============================================================================
+// while
+// ============================================================================
+
     while(1)
     {
 
@@ -239,16 +310,51 @@ main(void)
 
 			if (buttonPushed)
 			{
-				
+				if(ready)
+				{
+					loopControl = sampled;
 					UARTprintf("New stream....\n");
-					for (int i = 0; i < 128; i++)
-						UARTprintf("AIN0 = %4d\n", ADCValueArray[i]);
+					for (int i = loopControl ; i < 128; i++)
+					{
+						printingArray[printingCounter] = ADCValueArray[i];
+						printingCounter++;
+						if (printingCounter == 8)
+						{
+							printRow++;
+							UARTprintf("Row %2d: %5d %5d %5d %5d %5d %5d %5d %5d\n",printRow, printingArray[0],
+											printingArray[1], printingArray[2],printingArray[3],printingArray[4],
+											printingArray[5], printingArray[6],printingArray[7]);
+							printingCounter = 0;
+						}
+					}
+					for (int i = 0; i < loopControl; i++)
+					{
+						printingArray[printingCounter] = ADCValueArray[i];
+						printingCounter++;
+						if (printingCounter == 8)
+						{
+							printRow++;
+							UARTprintf("Row %2d: %5d %5d %5d %5d %5d %5d %5d %5d\n",printRow, printingArray[0],
+											printingArray[1], printingArray[2],printingArray[3],printingArray[4],
+											printingArray[5], printingArray[6],printingArray[7]);
+							printingCounter = 0;
+						}
+					}
+					printRow = 0;
+				}
+				else
+					UARTprintf("Not enough samples yet.\n");
 				buttonPushed = 0;
 			}
 			GPIOIntClear(GPIO_PORTF_BASE, GPIO_INT_PIN_0 | GPIO_INT_PIN_4);
 			GPIOIntEnable(GPIO_PORTF_BASE, GPIO_INT_PIN_0 | GPIO_INT_PIN_4);
     }
 }
+
+
+// ================================================================================
+// Functions
+// ================================================================================
 
 void Timer0A_Int(void)
 {
@@ -257,8 +363,6 @@ void Timer0A_Int(void)
 }
 
 void Switch_Handler (void) {
-	int leds;
-
 	// Disable interrupt for awhile to avoid switch bounce
 	GPIOIntDisable(GPIO_PORTF_BASE, GPIO_INT_PIN_0 | GPIO_INT_PIN_4);
 
@@ -268,3 +372,42 @@ void Switch_Handler (void) {
 	// Toggle LEDs	
 	buttonPushed = 1;
 }	
+
+void writeCommand(uint8_t c) {
+	//wait until TxFIFO empty
+	// set D/C low
+	// send 8-bit command
+	// wait until TxFIFO and transmit mode
+
+	while(SSIBusy(SSI0_BASE))
+    {
+    }
+
+	ROM_GPIOPinWrite(GPIO_PORTA_BASE, GPIO_PIN_6, 0);
+
+	SSIDataPut(SSI0_BASE, c);
+
+	while(SSIBusy(SSI0_BASE))
+    {
+    }
+	
+}
+
+
+void writeData(uint8_t c) {
+	
+	//set D/C output high
+	// sent 8-bit data using blocking put function
+	while(SSIBusy(SSI0_BASE))
+    {
+    }
+
+	ROM_GPIOPinWrite(GPIO_PORTA_BASE, GPIO_PIN_6, GPIO_PIN_6);
+	SSIDataPut(SSI0_BASE, c);
+
+	while(SSIBusy(SSI0_BASE))
+    {
+    }
+
+
+} 
