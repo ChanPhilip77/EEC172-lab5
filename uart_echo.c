@@ -33,13 +33,13 @@
 
 // xxxa_bxcd   a = power down, b = update both DAC registers
 //             c = load A register, d = load B register
-#define LOAD_DACA_INPUT 0x01
-#define LOAD_DACB_INPUT 0x02
-#define LOAD_DAC_INPUTS 0x03
-#define UPDATE_DAC_REG  0x08
-#define UPDATE_LOAD_A   0x09
-#define UPDATE_LOAD_B   0x0A
-#define UPDATE_LOAD     0x0B
+#define LOAD_DACA_INPUT 0x0100
+#define LOAD_DACB_INPUT 0x0200
+#define LOAD_DAC_INPUTS 0x0300
+#define UPDATE_DAC_REG  0x0800
+#define UPDATE_LOAD_A   0x0900
+#define UPDATE_LOAD_B   0x0A00
+#define UPDATE_LOAD     0x0B00
 //#define 
 
 //*****************************************************************************
@@ -88,8 +88,9 @@ int ready = 0;	// collected 128 samples?
 
 void Switch_Handler (void);
 void Timer0A_Int(void);
-void writeCommand(uint8_t c);
-void writeData(uint8_t c);
+void writeData(uint16_t c);
+void loadDACA(uint8_t c);
+void loadDACB(uint8_t c);
 
 
 void SS3IntHandler (void) {
@@ -126,7 +127,8 @@ void SS3IntHandler (void) {
 	}
 	
 	// Add output stuff here
-	
+	loadDACA(movingAverage);
+	loadDACB(comp);
 	
 	sampled++;
 	if (sampled == 128)
@@ -394,7 +396,7 @@ void writeCommand(uint8_t c) {
 }
 
 
-void writeData(uint8_t c) {
+void writeData(uint16_t c) {
 	
 	//set D/C output high
 	// sent 8-bit data using blocking put function
@@ -411,3 +413,17 @@ void writeData(uint8_t c) {
 
 
 } 
+
+
+void loadDACA(uint8_t c)
+{
+	uint16_t data;
+	data = UPDATE_LOAD_A + c;
+	writeData(data);
+}
+void loadDACB(uint8_t c)
+{
+	uint16_t data;
+	data = UPDATE_LOAD_B + c;
+	writeData(data);
+}
